@@ -7,6 +7,7 @@ const cors = require('cors');
 const connectDB = require('./config/db');
 const adminRoutes = require('./routes/adminRoutes');
 const candidateRoutes = require('./routes/candidateRoutes');
+const contactRoutes = require('./routes/contactRoutes');
 
 const app = express();
 
@@ -42,6 +43,9 @@ app.use(
 app.use(express.json({ limit: '1mb' }));
 app.use(express.urlencoded({ extended: true }));
 
+// Static uploads (resumes, etc.)
+app.use('/uploads', express.static('uploads'));
+
 // Health check (Render uses this kind of endpoint to verify deployments)
 app.get('/', (req, res) => {
   res.json({ status: 'ok', service: 'placement-crm-api' });
@@ -54,6 +58,7 @@ app.get('/api/health', (req, res) => {
 // Routes
 app.use('/api/admin', adminRoutes);
 app.use('/api/candidate', candidateRoutes);
+app.use('/api/contact', contactRoutes);
 
 // 404 handler
 app.use((req, res) => {

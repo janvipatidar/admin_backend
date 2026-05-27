@@ -90,6 +90,9 @@ const createCandidate = async (req, res) => {
         .json({ message: 'Name, email and phone are required' });
     }
 
+    const resumeUrl =
+      req.file && req.file.filename ? `/uploads/resumes/${req.file.filename}` : (body.resumeUrl || '');
+
     const candidate = await Candidate.create({
       name: body.name,
       email: body.email,
@@ -104,7 +107,7 @@ const createCandidate = async (req, res) => {
       currentIndustry: body.currentIndustry || '',
       location: body.location || '',
       expectedSalary: Number(body.expectedSalary) || 0,
-      resumeUrl: body.resumeUrl || '',
+      resumeUrl,
       status: body.status || 'Applied',
       notes: body.notes || ''
     });
