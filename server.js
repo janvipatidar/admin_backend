@@ -19,7 +19,8 @@ const allowedOrigins = [
   process.env.CLIENT_URL,
   'http://localhost:3000',
   'http://127.0.0.1:3000',
-  'https://janvipatidar-adminfrontend.vercel.app'
+  'https://janvipatidar-adminfrontend.vercel.app',
+  'https://www.dreamsakar.com/'
 ].filter(Boolean);
 
 app.use(
