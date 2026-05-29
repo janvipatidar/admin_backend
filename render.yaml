@@ -18,6 +18,10 @@ services:
         value: 7d
       - key: CLIENT_URL
         sync: false
+        # Set in Render dashboard, e.g. https://www.dreamsakar.com (no trailing slash)
+      - key: USER_FRONTEND_URL
+        sync: false
+        # Optional alias for public site, e.g. https://www.dreamsakar.com
       - key: GOOGLE_SHEETS_ENABLED
         value: "false"
       - key: GOOGLE_SHEETS_ID

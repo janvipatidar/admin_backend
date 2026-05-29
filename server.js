@@ -14,28 +14,48 @@ const app = express();
 // Connect to MongoDB
 connectDB();
 
-// CORS - allow the configured client + common dev origins
+// CORS — browsers send Origin without a trailing slash (e.g. https://www.dreamsakar.com)
+const normalizeOrigin = (value) =>
+  String(value || '')
+    .trim()
+    .replace(/\/+$/, '');
+
 const allowedOrigins = [
   process.env.CLIENT_URL,
+  process.env.USER_FRONTEND_URL,
   'http://localhost:3000',
+  'http://localhost:5173',
   'http://127.0.0.1:3000',
+  'http://127.0.0.1:5173',
   'https://janvipatidar-adminfrontend.vercel.app',
-  'https://www.dreamsakar.com/'
-].filter(Boolean);
+  'https://www.dreamsakar.com',
+  'https://dreamsakar.com'
+]
+  .map(normalizeOrigin)
+  .filter(Boolean);
+
+const isOriginAllowed = (origin) => {
+  const normalized = normalizeOrigin(origin);
+  return allowedOrigins.includes(normalized);
+};
 
 app.use(
   cors({
-    origin: function (origin, callback) {
-      // Allow non-browser requests (no origin) and any whitelisted origin.
-      // In production you may want to be stricter here.
+    origin(origin, callback) {
+      // Server-to-server / curl (no Origin header)
       if (!origin) return callback(null, true);
-      if (allowedOrigins.includes(origin) || process.env.NODE_ENV !== 'production') {
+
+      if (isOriginAllowed(origin) || process.env.NODE_ENV !== 'production') {
         return callback(null, true);
       }
-      return callback(new Error('Not allowed by CORS'));
+
+      console.warn('CORS blocked origin:', origin);
+      // Use false (not Error) — Error becomes 500 on OPTIONS preflight
+      return callback(null, false);
     },
     credentials: true,
-    // Expose binary download headers so the browser passes them through to JS
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization'],
     exposedHeaders: ['Content-Disposition', 'Content-Length', 'Content-Type']
   })
 );
