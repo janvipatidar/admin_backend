@@ -62,6 +62,14 @@ const candidateSchema = new mongoose.Schema({
     type: String,
     trim: true
   },
+  state: {
+    type: String,
+    trim: true
+  },
+  city: {
+    type: String,
+    trim: true
+  },
   location: {
     type: String,
     trim: true

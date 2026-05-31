@@ -9,8 +9,13 @@ const {
   getCandidate,
   updateCandidate,
   deleteCandidate,
-  adminCreateCandidate
+  adminCreateCandidate,
+  importCandidates
 } = require('../controllers/candidateController');
+const {
+  listContactMessages,
+  deleteContactMessage
+} = require('../controllers/contactController');
 
 const router = express.Router();
 
@@ -26,6 +31,9 @@ router.get('/me', me);
 router.get('/candidates', listCandidates);
 router.get('/candidates/stats', candidateStats);
 router.post('/candidate', adminCreateCandidate);
+router.post('/candidates/import', importCandidates);
+router.get('/contacts', listContactMessages);
+router.delete('/contacts/:id', deleteContactMessage);
 router.get('/candidate/:id', getCandidate);
 router.put('/candidate/:id', updateCandidate);
 router.delete('/candidate/:id', deleteCandidate);

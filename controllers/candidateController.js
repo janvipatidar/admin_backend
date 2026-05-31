@@ -4,6 +4,17 @@ const {
   addCandidateToSheet,
   updateCandidateInSheet
 } = require('../utils/googleSheets');
+const { validateCandidateFields } = require('../utils/validators');
+
+const buildLocation = (body) => {
+  if (body.location && String(body.location).trim()) {
+    return String(body.location).trim();
+  }
+  const city = body.city ? String(body.city).trim() : '';
+  const state = body.state ? String(body.state).trim() : '';
+  if (city && state) return `${city}, ${state}`;
+  return city || state || '';
+};
 
 // Helper: turn comma separated strings into arrays of trimmed values
 const toArray = (value) => {
@@ -84,10 +95,9 @@ const createCandidate = async (req, res) => {
   try {
     const body = req.body || {};
 
-    if (!body.name || !body.email || !body.phone) {
-      return res
-        .status(400)
-        .json({ message: 'Name, email and phone are required' });
+    const fieldErrors = validateCandidateFields(body);
+    if (fieldErrors.length) {
+      return res.status(400).json({ message: fieldErrors.join('. ') });
     }
 
     const resumeUrl =
@@ -105,7 +115,9 @@ const createCandidate = async (req, res) => {
       previousEmployer: body.previousEmployer || '',
       keySkills: toArray(body.keySkills),
       currentIndustry: body.currentIndustry || '',
-      location: body.location || '',
+      state: body.state || '',
+      city: body.city || '',
+      location: buildLocation(body),
       expectedSalary: Number(body.expectedSalary) || 0,
       resumeUrl,
       status: body.status || 'Applied',
@@ -226,6 +238,8 @@ const updateCandidate = async (req, res) => {
       'previousEmployer',
       'keySkills',
       'currentIndustry',
+      'state',
+      'city',
       'location',
       'expectedSalary',
       'resumeUrl',
@@ -294,6 +308,91 @@ const adminCreateCandidate = async (req, res) => {
   return createCandidate(req, res);
 };
 
+// =====================================================================
+// ADMIN: bulk import from Excel (parsed JSON on client)
+// POST /api/admin/candidates/import
+// =====================================================================
+const importCandidates = async (req, res) => {
+  try {
+    const rows = Array.isArray(req.body.candidates) ? req.body.candidates : [];
+    if (!rows.length) {
+      return res.status(400).json({ message: 'No candidates to import' });
+    }
+
+    const created = [];
+    const failed = [];
+
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i] || {};
+      const payload = {
+        name: row.name || row.Name || '',
+        email: row.email || row.Email || '',
+        phone: row.phone || row.Phone || '',
+        education: row.education || row.Education || '',
+        experience: row.experience ?? row['Experience (yrs)'] ?? 0,
+        noticePeriod: row.noticePeriod || row['Notice Period'] || '',
+        currentEmployer: row.currentEmployer || row['Current Employer'] || '',
+        previousEmployer: row.previousEmployer || row['Previous Employer'] || '',
+        currentIndustry: row.currentIndustry || row.Industry || '',
+        state: row.state || row.State || '',
+        city: row.city || row.City || '',
+        location: row.location || row.Location || '',
+        expectedSalary: row.expectedSalary ?? row['Expected Salary'] ?? 0,
+        keySkills: row.keySkills || row.Skills || '',
+        status: row.status || row.Status || 'Applied',
+        resumeUrl: row.resumeUrl || row.Resume || '',
+        notes: row.notes || row.Notes || ''
+      };
+
+      const errors = validateCandidateFields(payload);
+      if (errors.length) {
+        failed.push({ row: i + 1, name: payload.name, reason: errors.join('. ') });
+        continue;
+      }
+
+      try {
+        const candidate = await Candidate.create({
+          name: payload.name,
+          email: payload.email,
+          phone: payload.phone,
+          education: payload.education,
+          experience: Number(payload.experience) || 0,
+          noticePeriod: payload.noticePeriod,
+          currentEmployer: payload.currentEmployer,
+          previousEmployer: payload.previousEmployer,
+          keySkills: toArray(payload.keySkills),
+          currentIndustry: payload.currentIndustry,
+          state: payload.state,
+          city: payload.city,
+          location: buildLocation(payload),
+          expectedSalary: Number(payload.expectedSalary) || 0,
+          resumeUrl: payload.resumeUrl,
+          status: payload.status || 'Applied',
+          notes: payload.notes
+        });
+        addCandidateToSheet(candidate);
+        created.push(candidate);
+      } catch (err) {
+        failed.push({
+          row: i + 1,
+          name: payload.name,
+          reason: err.message || 'Save failed'
+        });
+      }
+    }
+
+    return res.status(201).json({
+      message: `Imported ${created.length} candidate(s)`,
+      created: created.length,
+      failed: failed.length,
+      failures: failed
+    });
+  } catch (err) {
+    console.error('importCandidates error:', err);
+    return res.status(500).json({ message: 'Import failed' });
+  }
+};
+
 module.exports = {
   createCandidate,
   listCandidates,
@@ -301,5 +400,6 @@ module.exports = {
   getCandidate,
   updateCandidate,
   deleteCandidate,
-  adminCreateCandidate
+  adminCreateCandidate,
+  importCandidates
 };

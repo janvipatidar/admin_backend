@@ -86,9 +86,15 @@ app.use((req, res) => {
   res.status(404).json({ message: 'Route not found' });
 });
 
-// Central error handler
+// Central error handler (includes multer upload errors)
 app.use((err, req, res, next) => {
   console.error('Unhandled error:', err);
+  if (err.code === 'LIMIT_FILE_SIZE') {
+    return res.status(400).json({ message: 'File too large. Max size is 5MB.' });
+  }
+  if (err.message && err.message.includes('PDF/DOC')) {
+    return res.status(400).json({ message: err.message });
+  }
   res.status(err.status || 500).json({
     message: err.message || 'Internal server error'
   });
