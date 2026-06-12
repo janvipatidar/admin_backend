@@ -58,9 +58,43 @@ const candidateSchema = new mongoose.Schema({
     type: [String],
     default: []
   },
+  designation: {
+    type: String,
+    trim: true,
+    default: ''
+  },
+  currentCTC: {
+    type: Number,
+    default: 0,
+    min: 0
+  },
+  department: {
+    type: String,
+    trim: true,
+    default: ''
+  },
   currentIndustry: {
     type: String,
     trim: true
+  },
+  gender: {
+    type: String,
+    trim: true,
+    default: ''
+  },
+  ugQualification: {
+    type: String,
+    trim: true,
+    default: ''
+  },
+  pgQualification: {
+    type: String,
+    trim: true,
+    default: ''
+  },
+  isActive: {
+    type: Boolean,
+    default: true
   },
   state: {
     type: String,
@@ -114,5 +148,11 @@ candidateSchema.pre('save', function (next) {
 });
 
 candidateSchema.statics.ALLOWED_STATUSES = ALLOWED_STATUSES;
+
+candidateSchema.index({ designation: 1 });
+candidateSchema.index({ currentCTC: 1 });
+candidateSchema.index({ isActive: 1 });
+candidateSchema.index({ createdAt: -1 });
+candidateSchema.index({ keySkills: 1 });
 
 module.exports = mongoose.model('Candidate', candidateSchema);

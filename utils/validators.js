@@ -25,11 +25,33 @@ const validateContactFields = ({ name, email, phone, message }) => {
   return errors;
 };
 
-const validateCandidateFields = ({ name, email, phone }) => {
+const resolveCity = (body = {}) => {
+  const city = String(body.city || '').trim();
+  if (city.toLowerCase() === 'other') {
+    return String(body.customCity || '').trim();
+  }
+  return city;
+};
+
+const validateCandidateFields = (body = {}) => {
+  const { name, email, phone, designation, currentCTC, city, customCity } = body;
   const errors = [];
   if (!String(name || '').trim()) errors.push('Name is required');
   if (!isValidEmail(email)) errors.push('Valid email is required');
   if (!isValidPhone(phone)) errors.push('Valid 10-digit Indian phone number is required');
+  if (!String(designation || '').trim()) errors.push('Designation is required');
+  if (currentCTC === undefined || currentCTC === null || currentCTC === '') {
+    errors.push('Current CTC is required');
+  } else if (Number.isNaN(Number(currentCTC)) || Number(currentCTC) < 0) {
+    errors.push('Current CTC must be a valid number');
+  }
+  if (!String(city || '').trim()) errors.push('City is required');
+  if (String(city || '').trim().toLowerCase() === 'other' && !String(customCity || '').trim()) {
+    errors.push('Custom city is required when Other is selected');
+  }
+  if (!resolveCity(body) && String(city || '').trim()) {
+    errors.push('Valid city is required');
+  }
   return errors;
 };
 

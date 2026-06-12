@@ -1,100 +1,63 @@
-// Candidate controller — handles public submission + admin CRUD + search
+// Candidate controller — public submission + admin CRUD + advanced search
 const Candidate = require('../models/Candidate');
 const {
   addCandidateToSheet,
   updateCandidateInSheet
 } = require('../utils/googleSheets');
 const { validateCandidateFields } = require('../utils/validators');
+const { deleteResumeFile } = require('../utils/resumeFiles');
+const {
+  buildAdvancedSearchQuery,
+  parseSort,
+  toArray
+} = require('../utils/candidateSearch');
+const { resolveCity } = require('../utils/city');
 
 const buildLocation = (body) => {
   if (body.location && String(body.location).trim()) {
     return String(body.location).trim();
   }
-  const city = body.city ? String(body.city).trim() : '';
+  const city = resolveCity(body);
   const state = body.state ? String(body.state).trim() : '';
   if (city && state) return `${city}, ${state}`;
   return city || state || '';
 };
 
-// Helper: turn comma separated strings into arrays of trimmed values
-const toArray = (value) => {
-  if (!value) return [];
-  if (Array.isArray(value)) return value.map((v) => String(v).trim()).filter(Boolean);
-  return String(value)
-    .split(',')
-    .map((v) => v.trim())
-    .filter(Boolean);
-};
-
-// Escape a string so it can be safely used inside a RegExp
-const escapeRegex = (str) => String(str).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-
-// Build a Mongo query object from candidate-list query params.
-// Shared by the list endpoint and the Excel export endpoint.
-const buildCandidateQuery = (params = {}) => {
-  const {
-    status,
-    experience,
-    experienceMin,
-    experienceMax,
-    location,
-    industry,
-    education,
-    noticePeriod,
-    skills,
-    keyword
-  } = params;
-
-  const query = {};
-
-  if (status) query.status = status;
-  if (location) query.location = new RegExp(escapeRegex(location), 'i');
-  if (industry) query.currentIndustry = new RegExp(escapeRegex(industry), 'i');
-  if (education) query.education = new RegExp(escapeRegex(education), 'i');
-  if (noticePeriod) query.noticePeriod = new RegExp(escapeRegex(noticePeriod), 'i');
-
-  if (experience !== undefined && experience !== '') {
-    query.experience = Number(experience);
-  } else if (experienceMin !== undefined || experienceMax !== undefined) {
-    query.experience = {};
-    if (experienceMin !== undefined && experienceMin !== '') {
-      query.experience.$gte = Number(experienceMin);
-    }
-    if (experienceMax !== undefined && experienceMax !== '') {
-      query.experience.$lte = Number(experienceMax);
-    }
-  }
-
-  const skillsArr = toArray(skills);
-  if (skillsArr.length) {
-    query.keySkills = {
-      $in: skillsArr.map((s) => new RegExp(`^${escapeRegex(s)}$`, 'i'))
-    };
-  }
-
-  if (keyword && String(keyword).trim()) {
-    const re = new RegExp(escapeRegex(String(keyword).trim()), 'i');
-    query.$or = [
-      { name: re },
-      { email: re },
-      { keySkills: re },
-      { currentEmployer: re },
-      { previousEmployer: re }
-    ];
-  }
-
-  return query;
-};
-
+const buildCandidateDoc = (body, resumeUrl = '') => ({
+  name: String(body.name).trim(),
+  email: String(body.email).trim(),
+  phone: String(body.phone).trim(),
+  designation: String(body.designation || '').trim(),
+  currentCTC: Number(body.currentCTC) || 0,
+  department: String(body.department || '').trim(),
+  dateOfBirth: body.dateOfBirth || null,
+  education: body.education || '',
+  ugQualification: body.ugQualification || '',
+  pgQualification: body.pgQualification || '',
+  gender: body.gender || '',
+  experience: Number(body.experience) || 0,
+  noticePeriod: body.noticePeriod || '',
+  currentEmployer: body.currentEmployer || '',
+  previousEmployer: body.previousEmployer || '',
+  keySkills: toArray(body.keySkills),
+  currentIndustry: body.currentIndustry || '',
+  state: body.state || '',
+  city: resolveCity(body),
+  location: buildLocation(body),
+  expectedSalary: Number(body.expectedSalary) || 0,
+  resumeUrl,
+  status: body.status || 'Applied',
+  notes: body.notes || '',
+  isActive: body.isActive !== false && body.isActive !== 'false'
+});
 
 // =====================================================================
-// PUBLIC: create a candidate (used from the job application form)
+// PUBLIC: create candidate
 // POST /api/candidate
 // =====================================================================
 const createCandidate = async (req, res) => {
   try {
     const body = req.body || {};
-
     const fieldErrors = validateCandidateFields(body);
     if (fieldErrors.length) {
       return res.status(400).json({ message: fieldErrors.join('. ') });
@@ -103,28 +66,7 @@ const createCandidate = async (req, res) => {
     const resumeUrl =
       req.file && req.file.filename ? `/uploads/resumes/${req.file.filename}` : (body.resumeUrl || '');
 
-    const candidate = await Candidate.create({
-      name: body.name,
-      email: body.email,
-      phone: body.phone,
-      dateOfBirth: body.dateOfBirth || null,
-      education: body.education || '',
-      experience: Number(body.experience) || 0,
-      noticePeriod: body.noticePeriod || '',
-      currentEmployer: body.currentEmployer || '',
-      previousEmployer: body.previousEmployer || '',
-      keySkills: toArray(body.keySkills),
-      currentIndustry: body.currentIndustry || '',
-      state: body.state || '',
-      city: body.city || '',
-      location: buildLocation(body),
-      expectedSalary: Number(body.expectedSalary) || 0,
-      resumeUrl,
-      status: body.status || 'Applied',
-      notes: body.notes || ''
-    });
-
-    // Fire-and-forget sync to Google Sheets — never block the response
+    const candidate = await Candidate.create(buildCandidateDoc(body, resumeUrl));
     addCandidateToSheet(candidate);
 
     res.status(201).json({
@@ -138,7 +80,7 @@ const createCandidate = async (req, res) => {
 };
 
 // =====================================================================
-// ADMIN: list candidates with filters, search, pagination
+// ADMIN: simple candidate list (management table)
 // GET /api/admin/candidates
 // =====================================================================
 const listCandidates = async (req, res) => {
@@ -146,12 +88,11 @@ const listCandidates = async (req, res) => {
     const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
     const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 10, 1), 100);
     const skip = (page - 1) * limit;
-
-    const query = buildCandidateQuery(req.query);
+    const sort = parseSort(req.query.sortBy, req.query.sortOrder);
 
     const [items, total] = await Promise.all([
-      Candidate.find(query).sort({ createdAt: -1 }).skip(skip).limit(limit),
-      Candidate.countDocuments(query)
+      Candidate.find({}).sort(sort).skip(skip).limit(limit),
+      Candidate.countDocuments({})
     ]);
 
     res.json({
@@ -170,6 +111,39 @@ const listCandidates = async (req, res) => {
 };
 
 // =====================================================================
+// ADMIN: advanced search (Naukri-style filters)
+// GET /api/admin/candidates/search
+// =====================================================================
+const searchCandidates = async (req, res) => {
+  try {
+    const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
+    const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 20, 1), 100);
+    const skip = (page - 1) * limit;
+    const query = buildAdvancedSearchQuery(req.query);
+    const sort = parseSort(req.query.sortBy, req.query.sortOrder);
+
+    const [items, total] = await Promise.all([
+      Candidate.find(query).sort(sort).skip(skip).limit(limit),
+      Candidate.countDocuments(query)
+    ]);
+
+    res.json({
+      data: items,
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages: Math.ceil(total / limit) || 1
+      },
+      resultCount: total
+    });
+  } catch (err) {
+    console.error('searchCandidates error:', err);
+    res.status(500).json({ message: 'Search failed' });
+  }
+};
+
+// =====================================================================
 // ADMIN: dashboard stats
 // GET /api/admin/candidates/stats
 // =====================================================================
@@ -177,12 +151,9 @@ const candidateStats = async (req, res) => {
   try {
     const [total, byStatus] = await Promise.all([
       Candidate.countDocuments({}),
-      Candidate.aggregate([
-        { $group: { _id: '$status', count: { $sum: 1 } } }
-      ])
+      Candidate.aggregate([{ $group: { _id: '$status', count: { $sum: 1 } } }])
     ]);
 
-    // Default every known status to 0, then fill in real counts
     const stats = {
       total,
       Applied: 0,
@@ -221,7 +192,7 @@ const getCandidate = async (req, res) => {
 };
 
 // =====================================================================
-// ADMIN: update candidate (status, notes, anything)
+// ADMIN: update candidate
 // PUT /api/admin/candidate/:id
 // =====================================================================
 const updateCandidate = async (req, res) => {
@@ -230,8 +201,14 @@ const updateCandidate = async (req, res) => {
       'name',
       'email',
       'phone',
+      'designation',
+      'currentCTC',
+      'department',
       'dateOfBirth',
       'education',
+      'ugQualification',
+      'pgQualification',
+      'gender',
       'experience',
       'noticePeriod',
       'currentEmployer',
@@ -244,7 +221,8 @@ const updateCandidate = async (req, res) => {
       'expectedSalary',
       'resumeUrl',
       'status',
-      'notes'
+      'notes',
+      'isActive'
     ];
 
     const updates = {};
@@ -252,29 +230,49 @@ const updateCandidate = async (req, res) => {
       if (req.body[field] !== undefined) {
         if (field === 'keySkills') {
           updates.keySkills = toArray(req.body.keySkills);
-        } else if (field === 'experience' || field === 'expectedSalary') {
+        } else if (field === 'experience' || field === 'expectedSalary' || field === 'currentCTC') {
           updates[field] = Number(req.body[field]) || 0;
+        } else if (field === 'isActive') {
+          updates.isActive = req.body.isActive !== false && req.body.isActive !== 'false';
         } else {
           updates[field] = req.body[field];
         }
       }
     });
 
+    if (req.body.city !== undefined || req.body.state !== undefined || req.body.location !== undefined) {
+      updates.location = buildLocation({ ...req.body, ...updates });
+    }
+
+    if (updates.email || updates.phone || updates.designation !== undefined || updates.currentCTC !== undefined) {
+      const existing = await Candidate.findById(req.params.id);
+      if (!existing) {
+        return res.status(404).json({ message: 'Candidate not found' });
+      }
+      const check = validateCandidateFields({
+        name: updates.name || existing.name,
+        email: updates.email || existing.email,
+        phone: updates.phone || existing.phone,
+        designation: updates.designation !== undefined ? updates.designation : existing.designation,
+        currentCTC: updates.currentCTC !== undefined ? updates.currentCTC : existing.currentCTC
+      });
+      if (check.length) {
+        return res.status(400).json({ message: check.join('. ') });
+      }
+    }
+
     updates.updatedAt = new Date();
 
-    const candidate = await Candidate.findByIdAndUpdate(
-      req.params.id,
-      updates,
-      { new: true, runValidators: true }
-    );
+    const candidate = await Candidate.findByIdAndUpdate(req.params.id, updates, {
+      new: true,
+      runValidators: true
+    });
 
     if (!candidate) {
       return res.status(404).json({ message: 'Candidate not found' });
     }
 
-    // Sync to Google Sheets in the background
     updateCandidateInSheet(candidate);
-
     res.json({ message: 'Candidate updated', candidate });
   } catch (err) {
     console.error('updateCandidate error:', err);
@@ -283,7 +281,7 @@ const updateCandidate = async (req, res) => {
 };
 
 // =====================================================================
-// ADMIN: delete candidate
+// ADMIN: delete single candidate + resume file
 // DELETE /api/admin/candidate/:id
 // =====================================================================
 const deleteCandidate = async (req, res) => {
@@ -292,6 +290,7 @@ const deleteCandidate = async (req, res) => {
     if (!candidate) {
       return res.status(404).json({ message: 'Candidate not found' });
     }
+    deleteResumeFile(candidate.resumeUrl);
     res.json({ message: 'Candidate deleted' });
   } catch (err) {
     console.error('deleteCandidate error:', err);
@@ -300,16 +299,49 @@ const deleteCandidate = async (req, res) => {
 };
 
 // =====================================================================
-// ADMIN: create candidate manually (admin form)
-// POST /api/admin/candidate
+// ADMIN: bulk delete
+// POST /api/admin/candidates/bulk-delete
 // =====================================================================
-const adminCreateCandidate = async (req, res) => {
-  // Same as the public endpoint, but reachable only with a valid token.
-  return createCandidate(req, res);
+const bulkDeleteCandidates = async (req, res) => {
+  try {
+    const ids = Array.isArray(req.body.ids) ? req.body.ids.filter(Boolean) : [];
+    if (!ids.length) {
+      return res.status(400).json({ message: 'No candidates selected' });
+    }
+
+    const deleted = [];
+    const failed = [];
+
+    for (const id of ids) {
+      try {
+        const candidate = await Candidate.findByIdAndDelete(id);
+        if (!candidate) {
+          failed.push({ id, reason: 'Not found' });
+          continue;
+        }
+        deleteResumeFile(candidate.resumeUrl);
+        deleted.push(id);
+      } catch (err) {
+        failed.push({ id, reason: err.message || 'Delete failed' });
+      }
+    }
+
+    res.json({
+      message: `Deleted ${deleted.length} candidate(s)`,
+      deleted: deleted.length,
+      failed: failed.length,
+      failures: failed
+    });
+  } catch (err) {
+    console.error('bulkDeleteCandidates error:', err);
+    res.status(500).json({ message: 'Bulk delete failed' });
+  }
 };
 
+const adminCreateCandidate = async (req, res) => createCandidate(req, res);
+
 // =====================================================================
-// ADMIN: bulk import from Excel (parsed JSON on client)
+// ADMIN: bulk import
 // POST /api/admin/candidates/import
 // =====================================================================
 const importCandidates = async (req, res) => {
@@ -328,7 +360,13 @@ const importCandidates = async (req, res) => {
         name: row.name || row.Name || '',
         email: row.email || row.Email || '',
         phone: row.phone || row.Phone || '',
+        designation: row.designation || row.Designation || '',
+        currentCTC: row.currentCTC ?? row['Current CTC'] ?? row.CTC ?? 0,
+        department: row.department || row.Department || '',
         education: row.education || row.Education || '',
+        ugQualification: row.ugQualification || row['UG Qualification'] || '',
+        pgQualification: row.pgQualification || row['PG Qualification'] || '',
+        gender: row.gender || row.Gender || '',
         experience: row.experience ?? row['Experience (yrs)'] ?? 0,
         noticePeriod: row.noticePeriod || row['Notice Period'] || '',
         currentEmployer: row.currentEmployer || row['Current Employer'] || '',
@@ -341,7 +379,8 @@ const importCandidates = async (req, res) => {
         keySkills: row.keySkills || row.Skills || '',
         status: row.status || row.Status || 'Applied',
         resumeUrl: row.resumeUrl || row.Resume || '',
-        notes: row.notes || row.Notes || ''
+        notes: row.notes || row.Notes || '',
+        isActive: row.isActive !== false && row.isActive !== 'Inactive'
       };
 
       const errors = validateCandidateFields(payload);
@@ -351,33 +390,11 @@ const importCandidates = async (req, res) => {
       }
 
       try {
-        const candidate = await Candidate.create({
-          name: payload.name,
-          email: payload.email,
-          phone: payload.phone,
-          education: payload.education,
-          experience: Number(payload.experience) || 0,
-          noticePeriod: payload.noticePeriod,
-          currentEmployer: payload.currentEmployer,
-          previousEmployer: payload.previousEmployer,
-          keySkills: toArray(payload.keySkills),
-          currentIndustry: payload.currentIndustry,
-          state: payload.state,
-          city: payload.city,
-          location: buildLocation(payload),
-          expectedSalary: Number(payload.expectedSalary) || 0,
-          resumeUrl: payload.resumeUrl,
-          status: payload.status || 'Applied',
-          notes: payload.notes
-        });
+        const candidate = await Candidate.create(buildCandidateDoc(payload, payload.resumeUrl));
         addCandidateToSheet(candidate);
         created.push(candidate);
       } catch (err) {
-        failed.push({
-          row: i + 1,
-          name: payload.name,
-          reason: err.message || 'Save failed'
-        });
+        failed.push({ row: i + 1, name: payload.name, reason: err.message || 'Save failed' });
       }
     }
 
@@ -396,10 +413,12 @@ const importCandidates = async (req, res) => {
 module.exports = {
   createCandidate,
   listCandidates,
+  searchCandidates,
   candidateStats,
   getCandidate,
   updateCandidate,
   deleteCandidate,
+  bulkDeleteCandidates,
   adminCreateCandidate,
   importCandidates
 };
