@@ -19,6 +19,11 @@ const {
   listContactMessages,
   deleteContactMessage
 } = require('../controllers/contactController');
+const {
+  listCandidateComments,
+  createCandidateComment,
+  deleteCandidateComment
+} = require('../controllers/commentController');
 
 const router = express.Router();
 
@@ -40,6 +45,9 @@ router.post('/candidates/bulk-delete', bulkDeleteCandidates);
 router.get('/contacts', listContactMessages);
 router.delete('/contacts/:id', deleteContactMessage);
 router.get('/candidate/:id', getCandidate);
+router.get('/candidate/:id/comments', listCandidateComments);
+router.post('/candidate/:id/comments', createCandidateComment);
+router.delete('/candidate/comments/:commentId', deleteCandidateComment);
 router.put('/candidate/:id', updateCandidate);
 router.delete('/candidate/:id', deleteCandidate);
 

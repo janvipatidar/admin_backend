@@ -1,3 +1,5 @@
+const { validateEducation } = require('./candidateOptions');
+
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/i;
 // India-friendly: 10 digits, optional +91 prefix
 const PHONE_RE = /^(?:\+91[\-\s]?)?[6-9]\d{9}$/;
@@ -52,6 +54,10 @@ const validateCandidateFields = (body = {}) => {
   if (!resolveCity(body) && String(city || '').trim()) {
     errors.push('Valid city is required');
   }
+
+  const educationErr = validateEducation(body.education, { required: true });
+  if (educationErr) errors.push(educationErr);
+
   return errors;
 };
 

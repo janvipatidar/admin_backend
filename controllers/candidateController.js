@@ -6,6 +6,7 @@ const {
 } = require('../utils/googleSheets');
 const { validateCandidateFields } = require('../utils/validators');
 const { deleteResumeFile } = require('../utils/resumeFiles');
+const { deleteCommentsForCandidate } = require('../controllers/commentController');
 const {
   buildAdvancedSearchQuery,
   parseSort,
@@ -291,6 +292,7 @@ const deleteCandidate = async (req, res) => {
       return res.status(404).json({ message: 'Candidate not found' });
     }
     deleteResumeFile(candidate.resumeUrl);
+    await deleteCommentsForCandidate(req.params.id);
     res.json({ message: 'Candidate deleted' });
   } catch (err) {
     console.error('deleteCandidate error:', err);
@@ -320,6 +322,7 @@ const bulkDeleteCandidates = async (req, res) => {
           continue;
         }
         deleteResumeFile(candidate.resumeUrl);
+        await deleteCommentsForCandidate(id);
         deleted.push(id);
       } catch (err) {
         failed.push({ id, reason: err.message || 'Delete failed' });
