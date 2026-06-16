@@ -1,5 +1,6 @@
 // Candidate controller — public submission + admin CRUD + advanced search
 const Candidate = require('../models/Candidate');
+const CandidateComment = require('../models/CandidateComment');
 const {
   addCandidateToSheet,
   updateCandidateInSheet
@@ -13,6 +14,15 @@ const {
   toArray
 } = require('../utils/candidateSearch');
 const { resolveCity } = require('../utils/city');
+const {
+  isEmptyRow,
+  rowToPayload,
+  duplicateKey,
+  normalizeEmail,
+  normalizePhoneForDup,
+  validateImportHeaders,
+  SHEET_NAME
+} = require('../utils/candidateExcel');
 
 const buildLocation = (body) => {
   if (body.location && String(body.location).trim()) {
@@ -48,7 +58,6 @@ const buildCandidateDoc = (body, resumeUrl = '') => ({
   expectedSalary: Number(body.expectedSalary) || 0,
   resumeUrl,
   status: body.status || 'Applied',
-  notes: body.notes || '',
   isActive: body.isActive !== false && body.isActive !== 'false'
 });
 
@@ -92,12 +101,40 @@ const listCandidates = async (req, res) => {
     const sort = parseSort(req.query.sortBy, req.query.sortOrder);
 
     const [items, total] = await Promise.all([
-      Candidate.find({}).sort(sort).skip(skip).limit(limit),
+      Candidate.find({}).sort(sort).skip(skip).limit(limit).lean(),
       Candidate.countDocuments({})
     ]);
 
+    const ids = items.map((c) => c._id);
+    const commentStats = ids.length
+      ? await CandidateComment.aggregate([
+          { $match: { candidateId: { $in: ids } } },
+          { $sort: { createdAt: -1 } },
+          {
+            $group: {
+              _id: '$candidateId',
+              commentCount: { $sum: 1 },
+              latestComment: { $first: '$comment' }
+            }
+          }
+        ])
+      : [];
+
+    const statsMap = Object.fromEntries(
+      commentStats.map((s) => [String(s._id), s])
+    );
+
+    const enriched = items.map((c) => {
+      const stats = statsMap[String(c._id)] || {};
+      return {
+        ...c,
+        commentCount: stats.commentCount || 0,
+        latestComment: stats.latestComment || ''
+      };
+    });
+
     res.json({
-      data: items,
+      data: enriched,
       pagination: {
         page,
         limit,
@@ -222,7 +259,6 @@ const updateCandidate = async (req, res) => {
       'expectedSalary',
       'resumeUrl',
       'status',
-      'notes',
       'isActive'
     ];
 
@@ -351,61 +387,115 @@ const importCandidates = async (req, res) => {
   try {
     const rows = Array.isArray(req.body.candidates) ? req.body.candidates : [];
     if (!rows.length) {
-      return res.status(400).json({ message: 'No candidates to import' });
+      return res.status(400).json({ message: 'Excel file has no data rows' });
     }
 
+    const firstDataRow = rows.find((r) => !isEmptyRow(r));
+    if (!firstDataRow) {
+      return res.status(400).json({ message: 'Excel file contains only empty rows' });
+    }
+
+    const missingHeaders = validateImportHeaders(firstDataRow);
+    if (missingHeaders.length) {
+      return res.status(400).json({
+        message: `Missing required columns: ${missingHeaders.join(', ')}`
+      });
+    }
+
+    const existing = await Candidate.find({}).select('_id email phone').lean();
+    const existingIds = new Set(existing.map((c) => String(c._id)));
+    const existingEmails = new Set(
+      existing.map((c) => normalizeEmail(c.email)).filter(Boolean)
+    );
+    const existingPhones = new Set(
+      existing.map((c) => normalizePhoneForDup(c.phone)).filter(Boolean)
+    );
+
+    const seenInFile = new Set();
     const created = [];
+    const duplicates = [];
+    const skipped = [];
     const failed = [];
 
     for (let i = 0; i < rows.length; i++) {
       const row = rows[i] || {};
-      const payload = {
-        name: row.name || row.Name || '',
-        email: row.email || row.Email || '',
-        phone: row.phone || row.Phone || '',
-        designation: row.designation || row.Designation || '',
-        currentCTC: row.currentCTC ?? row['Current CTC'] ?? row.CTC ?? 0,
-        department: row.department || row.Department || '',
-        education: row.education || row.Education || '',
-        ugQualification: row.ugQualification || row['UG Qualification'] || '',
-        pgQualification: row.pgQualification || row['PG Qualification'] || '',
-        gender: row.gender || row.Gender || '',
-        experience: row.experience ?? row['Experience (yrs)'] ?? 0,
-        noticePeriod: row.noticePeriod || row['Notice Period'] || '',
-        currentEmployer: row.currentEmployer || row['Current Employer'] || '',
-        previousEmployer: row.previousEmployer || row['Previous Employer'] || '',
-        currentIndustry: row.currentIndustry || row.Industry || '',
-        state: row.state || row.State || '',
-        city: row.city || row.City || '',
-        location: row.location || row.Location || '',
-        expectedSalary: row.expectedSalary ?? row['Expected Salary'] ?? 0,
-        keySkills: row.keySkills || row.Skills || '',
-        status: row.status || row.Status || 'Applied',
-        resumeUrl: row.resumeUrl || row.Resume || '',
-        notes: row.notes || row.Notes || '',
-        isActive: row.isActive !== false && row.isActive !== 'Inactive'
-      };
+      if (isEmptyRow(row)) {
+        skipped.push({ row: i + 2, reason: 'Empty row' });
+        continue;
+      }
+
+      const payload = rowToPayload(row);
+      const key = duplicateKey(payload);
+
+      if (!key) {
+        failed.push({ row: i + 2, name: payload.name, reason: 'Email or phone is required' });
+        continue;
+      }
+
+      if (seenInFile.has(key)) {
+        duplicates.push({
+          row: i + 2,
+          name: payload.name,
+          reason: 'Duplicate row in file'
+        });
+        continue;
+      }
+      seenInFile.add(key);
+
+      const isIdDup = payload.candidateId && existingIds.has(payload.candidateId);
+      const isEmailDup =
+        payload.email && existingEmails.has(normalizeEmail(payload.email));
+      const isPhoneDup =
+        payload.phone && existingPhones.has(normalizePhoneForDup(payload.phone));
+
+      if (isIdDup || isEmailDup || isPhoneDup) {
+        duplicates.push({
+          row: i + 2,
+          name: payload.name,
+          reason: isIdDup
+            ? 'Candidate ID already exists'
+            : isEmailDup
+              ? 'Email already exists'
+              : 'Phone already exists'
+        });
+        continue;
+      }
 
       const errors = validateCandidateFields(payload);
       if (errors.length) {
-        failed.push({ row: i + 1, name: payload.name, reason: errors.join('. ') });
+        failed.push({ row: i + 2, name: payload.name, reason: errors.join('. ') });
         continue;
       }
 
       try {
-        const candidate = await Candidate.create(buildCandidateDoc(payload, payload.resumeUrl));
+        const candidate = await Candidate.create(
+          buildCandidateDoc(payload, payload.resumeUrl)
+        );
         addCandidateToSheet(candidate);
         created.push(candidate);
+
+        if (payload.email) existingEmails.add(normalizeEmail(payload.email));
+        if (payload.phone) existingPhones.add(normalizePhoneForDup(payload.phone));
+        if (candidate._id) existingIds.add(String(candidate._id));
       } catch (err) {
-        failed.push({ row: i + 1, name: payload.name, reason: err.message || 'Save failed' });
+        failed.push({
+          row: i + 2,
+          name: payload.name,
+          reason: err.message || 'Save failed'
+        });
       }
     }
 
     return res.status(201).json({
       message: `Imported ${created.length} candidate(s)`,
-      created: created.length,
+      imported: created.length,
+      skipped: skipped.length,
+      duplicates: duplicates.length,
       failed: failed.length,
-      failures: failed
+      sheetName: SHEET_NAME,
+      failures: failed,
+      duplicateRows: duplicates,
+      skippedRows: skipped
     });
   } catch (err) {
     console.error('importCandidates error:', err);

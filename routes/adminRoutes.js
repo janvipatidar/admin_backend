@@ -22,6 +22,7 @@ const {
 const {
   listCandidateComments,
   createCandidateComment,
+  updateCandidateComment,
   deleteCandidateComment
 } = require('../controllers/commentController');
 
@@ -47,6 +48,7 @@ router.delete('/contacts/:id', deleteContactMessage);
 router.get('/candidate/:id', getCandidate);
 router.get('/candidate/:id/comments', listCandidateComments);
 router.post('/candidate/:id/comments', createCandidateComment);
+router.put('/candidate/comments/:commentId', updateCandidateComment);
 router.delete('/candidate/comments/:commentId', deleteCandidateComment);
 router.put('/candidate/:id', updateCandidate);
 router.delete('/candidate/:id', deleteCandidate);

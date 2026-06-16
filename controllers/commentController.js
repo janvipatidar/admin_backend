@@ -1,6 +1,8 @@
 const Candidate = require('../models/Candidate');
 const CandidateComment = require('../models/CandidateComment');
 
+const MAX_COMMENT_LENGTH = 5000;
+
 const formatComment = (doc) => ({
   _id: doc._id,
   candidateId: doc.candidateId,
@@ -10,6 +12,15 @@ const formatComment = (doc) => ({
   createdAt: doc.createdAt,
   updatedAt: doc.updatedAt
 });
+
+const validateCommentText = (text) => {
+  const trimmed = String(text || '').trim();
+  if (!trimmed) return 'Comment is required';
+  if (trimmed.length > MAX_COMMENT_LENGTH) {
+    return `Comment must be ${MAX_COMMENT_LENGTH} characters or less`;
+  }
+  return null;
+};
 
 // GET /api/admin/candidate/:id/comments
 const listCandidateComments = async (req, res) => {
@@ -34,8 +45,9 @@ const listCandidateComments = async (req, res) => {
 const createCandidateComment = async (req, res) => {
   try {
     const text = String(req.body.comment || '').trim();
-    if (!text) {
-      return res.status(400).json({ message: 'Comment is required' });
+    const validationError = validateCommentText(text);
+    if (validationError) {
+      return res.status(400).json({ message: validationError });
     }
 
     const candidate = await Candidate.findById(req.params.id).select('_id');
@@ -56,6 +68,49 @@ const createCandidateComment = async (req, res) => {
     console.error('createCandidateComment error:', err);
     res.status(500).json({ message: 'Failed to add comment' });
   }
+};
+
+// PUT /api/admin/candidate/comments/:commentId
+const updateCandidateComment = async (req, res) => {
+  try {
+    const text = String(req.body.comment || '').trim();
+    const validationError = validateCommentText(text);
+    if (validationError) {
+      return res.status(400).json({ message: validationError });
+    }
+
+    const comment = await CandidateComment.findByIdAndUpdate(
+      req.params.commentId,
+      { comment: text, updatedAt: new Date() },
+      { new: true }
+    );
+
+    if (!comment) {
+      return res.status(404).json({ message: 'Comment not found' });
+    }
+
+    res.json({ message: 'Comment updated', comment: formatComment(comment) });
+  } catch (err) {
+    console.error('updateCandidateComment error:', err);
+    res.status(500).json({ message: 'Failed to update comment' });
+  }
+};
+
+const createCommentsForCandidate = async (candidateId, comments = [], admin = {}) => {
+  const createdBy = admin.email || 'Admin';
+  const docs = [];
+  for (const text of comments) {
+    const trimmed = String(text || '').trim();
+    if (!trimmed || validateCommentText(trimmed)) continue;
+    const doc = await CandidateComment.create({
+      candidateId,
+      comment: trimmed,
+      createdBy,
+      adminId: admin.id || null
+    });
+    docs.push(formatComment(doc));
+  }
+  return docs;
 };
 
 // DELETE /api/admin/candidate/comments/:commentId
@@ -79,6 +134,9 @@ const deleteCommentsForCandidate = async (candidateId) => {
 module.exports = {
   listCandidateComments,
   createCandidateComment,
+  updateCandidateComment,
   deleteCandidateComment,
-  deleteCommentsForCandidate
+  deleteCommentsForCandidate,
+  createCommentsForCandidate,
+  MAX_COMMENT_LENGTH
 };
