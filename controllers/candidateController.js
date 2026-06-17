@@ -18,6 +18,7 @@ const {
   isEmptyRow,
   rowToPayload,
   duplicateKey,
+  isDuplicateCandidate,
   normalizeEmail,
   normalizePhoneForDup,
   validateImportHeaders,
@@ -155,7 +156,7 @@ const listCandidates = async (req, res) => {
 const searchCandidates = async (req, res) => {
   try {
     const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
-    const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 20, 1), 100);
+    const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 20, 1), 160);
     const skip = (page - 1) * limit;
     const query = buildAdvancedSearchQuery(req.query);
     const sort = parseSort(req.query.sortBy, req.query.sortOrder);
@@ -402,8 +403,7 @@ const importCandidates = async (req, res) => {
       });
     }
 
-    const existing = await Candidate.find({}).select('_id email phone').lean();
-    const existingIds = new Set(existing.map((c) => String(c._id)));
+    const existing = await Candidate.find({}).select('email phone').lean();
     const existingEmails = new Set(
       existing.map((c) => normalizeEmail(c.email)).filter(Boolean)
     );
@@ -428,7 +428,7 @@ const importCandidates = async (req, res) => {
       const key = duplicateKey(payload);
 
       if (!key) {
-        failed.push({ row: i + 2, name: payload.name, reason: 'Email or phone is required' });
+        failed.push({ row: i + 2, name: payload.name, reason: 'Mobile or email is required' });
         continue;
       }
 
@@ -442,21 +442,12 @@ const importCandidates = async (req, res) => {
       }
       seenInFile.add(key);
 
-      const isIdDup = payload.candidateId && existingIds.has(payload.candidateId);
-      const isEmailDup =
-        payload.email && existingEmails.has(normalizeEmail(payload.email));
-      const isPhoneDup =
-        payload.phone && existingPhones.has(normalizePhoneForDup(payload.phone));
-
-      if (isIdDup || isEmailDup || isPhoneDup) {
+      const dupCheck = isDuplicateCandidate(payload, existingPhones, existingEmails);
+      if (dupCheck.duplicate) {
         duplicates.push({
           row: i + 2,
           name: payload.name,
-          reason: isIdDup
-            ? 'Candidate ID already exists'
-            : isEmailDup
-              ? 'Email already exists'
-              : 'Phone already exists'
+          reason: dupCheck.reason
         });
         continue;
       }
@@ -476,7 +467,6 @@ const importCandidates = async (req, res) => {
 
         if (payload.email) existingEmails.add(normalizeEmail(payload.email));
         if (payload.phone) existingPhones.add(normalizePhoneForDup(payload.phone));
-        if (candidate._id) existingIds.add(String(candidate._id));
       } catch (err) {
         failed.push({
           row: i + 2,
