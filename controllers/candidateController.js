@@ -5,7 +5,8 @@ const {
   addCandidateToSheet,
   updateCandidateInSheet
 } = require('../utils/googleSheets');
-const { validateCandidateFields } = require('../utils/validators');
+const { validateCandidateFields, validateImportCandidateFields } = require('../utils/validators');
+const { normalizeCurrentCTC } = require('../utils/ctc');
 const { deleteResumeFile } = require('../utils/resumeFiles');
 const { deleteCommentsForCandidate } = require('../controllers/commentController');
 const {
@@ -40,7 +41,7 @@ const buildCandidateDoc = (body, resumeUrl = '') => ({
   email: String(body.email).trim(),
   phone: String(body.phone).trim(),
   designation: String(body.designation || '').trim(),
-  currentCTC: Number(body.currentCTC) || 0,
+  currentCTC: normalizeCurrentCTC(body.currentCTC),
   department: String(body.department || '').trim(),
   dateOfBirth: body.dateOfBirth || null,
   education: body.education || '',
@@ -90,6 +91,34 @@ const createCandidate = async (req, res) => {
   }
 };
 
+const buildCandidateListQuery = (search) => {
+  const term = String(search || '').trim();
+  if (!term) return {};
+
+  const escaped = term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const re = new RegExp(escaped, 'i');
+
+  const or = [
+    { name: re },
+    { email: re },
+    { phone: re },
+    { location: re },
+    { city: re },
+    { state: re },
+    {
+      $expr: {
+        $regexMatch: {
+          input: { $toString: '$experience' },
+          regex: escaped,
+          options: 'i'
+        }
+      }
+    }
+  ];
+
+  return { $or: or };
+};
+
 // =====================================================================
 // ADMIN: simple candidate list (management table)
 // GET /api/admin/candidates
@@ -100,10 +129,11 @@ const listCandidates = async (req, res) => {
     const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 10, 1), 100);
     const skip = (page - 1) * limit;
     const sort = parseSort(req.query.sortBy, req.query.sortOrder);
+    const filter = buildCandidateListQuery(req.query.search);
 
     const [items, total] = await Promise.all([
-      Candidate.find({}).sort(sort).skip(skip).limit(limit).lean(),
-      Candidate.countDocuments({})
+      Candidate.find(filter).sort(sort).skip(skip).limit(limit).lean(),
+      Candidate.countDocuments(filter)
     ]);
 
     const ids = items.map((c) => c._id);
@@ -268,8 +298,10 @@ const updateCandidate = async (req, res) => {
       if (req.body[field] !== undefined) {
         if (field === 'keySkills') {
           updates.keySkills = toArray(req.body.keySkills);
-        } else if (field === 'experience' || field === 'expectedSalary' || field === 'currentCTC') {
+        } else if (field === 'experience' || field === 'expectedSalary') {
           updates[field] = Number(req.body[field]) || 0;
+        } else if (field === 'currentCTC') {
+          updates[field] = normalizeCurrentCTC(req.body[field]);
         } else if (field === 'isActive') {
           updates.isActive = req.body.isActive !== false && req.body.isActive !== 'false';
         } else {
@@ -452,7 +484,7 @@ const importCandidates = async (req, res) => {
         continue;
       }
 
-      const errors = validateCandidateFields(payload);
+      const errors = validateImportCandidateFields(payload);
       if (errors.length) {
         failed.push({ row: i + 2, name: payload.name, reason: errors.join('. ') });
         continue;

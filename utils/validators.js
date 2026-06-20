@@ -1,4 +1,5 @@
 const { validateEducation } = require('./candidateOptions');
+const { isValidCurrentCTC } = require('./ctc');
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/i;
 // India-friendly: 10 digits, optional +91 prefix
@@ -35,36 +36,49 @@ const resolveCity = (body = {}) => {
   return city;
 };
 
-const validateCandidateFields = (body = {}) => {
-  const { name, email, phone, designation, currentCTC, city, customCity } = body;
+const validateCandidateFields = (body = {}, { forImport = false } = {}) => {
+  const { name, email, phone, designation, currentCTC, city, customCity, location, state } = body;
   const errors = [];
   if (!String(name || '').trim()) errors.push('Name is required');
   if (!isValidEmail(email)) errors.push('Valid email is required');
   if (!isValidPhone(phone)) errors.push('Valid 10-digit Indian phone number is required');
   if (!String(designation || '').trim()) errors.push('Designation is required');
-  if (currentCTC === undefined || currentCTC === null || currentCTC === '') {
+  if (!isValidCurrentCTC(currentCTC)) {
     errors.push('Current CTC is required');
-  } else if (Number.isNaN(Number(currentCTC)) || Number(currentCTC) < 0) {
-    errors.push('Current CTC must be a valid number');
-  }
-  if (!String(city || '').trim()) errors.push('City is required');
-  if (String(city || '').trim().toLowerCase() === 'other' && !String(customCity || '').trim()) {
-    errors.push('Custom city is required when Other is selected');
-  }
-  if (!resolveCity(body) && String(city || '').trim()) {
-    errors.push('Valid city is required');
   }
 
-  const educationErr = validateEducation(body.education, { required: true });
-  if (educationErr) errors.push(educationErr);
+  if (forImport) {
+    const hasLocation =
+      String(location || '').trim() ||
+      String(city || '').trim() ||
+      String(state || '').trim();
+    if (!hasLocation) errors.push('City or location is required');
+  } else {
+    if (!String(city || '').trim()) errors.push('City is required');
+    if (String(city || '').trim().toLowerCase() === 'other' && !String(customCity || '').trim()) {
+      errors.push('Custom city is required when Other is selected');
+    }
+    if (!resolveCity(body) && String(city || '').trim()) {
+      errors.push('Valid city is required');
+    }
+  }
+
+  if (!forImport) {
+    const educationErr = validateEducation(body.education, { required: true });
+    if (educationErr) errors.push(educationErr);
+  }
 
   return errors;
 };
+
+const validateImportCandidateFields = (body = {}) =>
+  validateCandidateFields(body, { forImport: true });
 
 module.exports = {
   isValidEmail,
   isValidPhone,
   normalizePhone,
   validateContactFields,
-  validateCandidateFields
+  validateCandidateFields,
+  validateImportCandidateFields
 };

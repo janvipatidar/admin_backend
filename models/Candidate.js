@@ -64,9 +64,9 @@ const candidateSchema = new mongoose.Schema({
     default: ''
   },
   currentCTC: {
-    type: Number,
-    default: 0,
-    min: 0
+    type: String,
+    trim: true,
+    default: ''
   },
   department: {
     type: String,
